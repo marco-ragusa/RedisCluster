@@ -1,0 +1,202 @@
+# NAMESPACE RCLU
+kind: Namespace
+apiVersion: v1
+metadata:
+  name: rclu
+  labels:
+    name: rclu
+
+---
+
+# NAMESPACE RCLU > default-viewer ROLEBINDING
+# To grand k8s API inside the redis-cluster master node
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: default-viewer
+  namespace: rclu
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: view
+subjects:
+- kind: ServiceAccount
+  name: default
+  namespace: rclu
+
+---
+
+# NAMESPACE RCLU > redis-cluster SERVICE
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-cluster-service
+  namespace: rclu
+  labels:
+    app: redis-cluster
+spec:
+  type: NodePort
+  ports:
+  - port: 6379
+    nodePort: 30079
+  selector:
+    app: redis-cluster
+
+---
+
+# NAMESPACE RCLU > redis-cluster-0 SERVICE
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-cluster-service-0
+  namespace: rclu
+  labels:
+    app: redis-cluster-0
+spec:
+  type: ClusterIP
+  ports:
+  - port: 6379
+  selector:
+    statefulset.kubernetes.io/pod-name: redis-cluster-0
+
+---
+
+# NAMESPACE RCLU > redis-cluster-1 SERVICE
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-cluster-service-1
+  namespace: rclu
+  labels:
+    app: redis-cluster-1
+spec:
+  type: ClusterIP
+  ports:
+  - port: 6379
+  selector:
+    statefulset.kubernetes.io/pod-name: redis-cluster-1
+
+---
+
+# NAMESPACE RCLU > redis-cluster-2 SERVICE
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-cluster-service-2
+  namespace: rclu
+  labels:
+    app: redis-cluster-2
+spec:
+  type: ClusterIP
+  ports:
+  - port: 6379
+  selector:
+    statefulset.kubernetes.io/pod-name: redis-cluster-2
+
+---
+
+# NAMESPACE RCLU > redis-cluster CONFIGMAP
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-cluster-config
+  namespace: rclu
+data:
+  emptyPass: "yes"
+  # useless but required
+  nodes: "redis-cluster-service-0 redis-cluster-service-1 redis-cluster-service-2"
+
+---
+
+# NAMESPACE RCLU > redis-cluster CONFIGMAP VOLUME
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-cluster-config-scripts-vol
+  namespace: rclu
+data:
+  postrun.sh: |
+    #!/bin/bash
+    # Get statefulset index from the hostname
+    STATEFULSET_IDX=${HOSTNAME##*-}
+    # The last host of statefulset are the redis-cluster master 
+    if [ $STATEFULSET_IDX == "2" ]
+    then
+      # Initial sleep time
+      sleep 5
+      
+      # Point to the internal API server hostname
+      APISERVER=https://kubernetes.default.svc
+      
+      # Path to ServiceAccount token
+      SERVICEACCOUNT=/var/run/secrets/kubernetes.io/serviceaccount
+      
+      # Read this Pod's namespace
+      NAMESPACE=$(cat ${SERVICEACCOUNT}/namespace)
+      
+      # Read the ServiceAccount bearer token
+      TOKEN=$(cat ${SERVICEACCOUNT}/token)
+      
+      # Reference the internal certificate authority (CA)
+      CACERT=${SERVICEACCOUNT}/ca.crt
+      
+      # Get redis pods ip with k8s API
+      REDIS_NODES=$(curl -s --cacert ${CACERT} --header "Authorization: Bearer ${TOKEN}" -X GET ${APISERVER}/api/v1/namespaces/${NAMESPACE}/pods?labelSelector=app%3Dredis-cluster | grep '"ip":' | awk '{gsub("\"",""); gsub("$",":6379"); print $2}' | tr '\n' ' ')
+      
+      # Initialize the redis cluster
+      redis-cli --cluster create --cluster-replicas 0 $REDIS_NODES --cluster-yes
+    fi
+
+---
+
+# NAMESPACE LLL > redis-cluster STATEFULSET
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis-cluster
+  namespace: rclu
+spec:
+  selector:
+    matchLabels:
+      app: redis-cluster
+  serviceName: "redis-cluster"
+  replicas: 3
+  template:
+    metadata:
+      labels:
+        app: redis-cluster
+    spec:
+      containers:
+      - name: redis-cluster
+        image: docker.io/bitnami/redis-cluster
+        env:
+        - name: ALLOW_EMPTY_PASSWORD
+          valueFrom:
+            configMapKeyRef:
+              name: redis-cluster-config
+              key: emptyPass
+        - name: REDIS_NODES
+          valueFrom:
+            configMapKeyRef:
+              name: redis-cluster-config
+              key: nodes
+        ports:
+        - containerPort: 6379
+          name: redis-cluster
+        volumeMounts:
+        - name: scripts-vol
+          mountPath: /mnt/scripts
+        lifecycle:
+          postStart:
+            exec:
+              command: ["/bin/sh", "-c", "/mnt/scripts/postrun.sh"]
+      volumes:
+      - name: scripts-vol
+        configMap:
+          name: redis-cluster-config-scripts-vol
+          defaultMode: 0555
+
+# # Redis cluster info
+# export NAMESPACE=rclu
+# kubectl exec -it redis-cluster-0 -n $NAMESPACE -- redis-cli cluster info
+# for x in $(seq 0 2); do echo "redis-cluster-$x"; kubectl exec redis-cluster-$x -n $NAMESPACE -- redis-cli role; echo; done
