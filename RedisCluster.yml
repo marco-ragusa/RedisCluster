@@ -9,7 +9,7 @@ metadata:
 ---
 
 # NAMESPACE RCLU > default-viewer ROLEBINDING
-# To grand k8s API inside the redis-cluster master node
+# To grant k8s API inside the redis-cluster master node
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
