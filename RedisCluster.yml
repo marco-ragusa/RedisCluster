@@ -119,7 +119,7 @@ data:
     #!/bin/bash
     # Get statefulset index from the hostname
     STATEFULSET_IDX=${HOSTNAME##*-}
-    # The last host of statefulset are the redis-cluster master 
+    # The last host of statefulset are the redis-cluster master initializatior
     if [ $STATEFULSET_IDX == "2" ]
     then
       # Initial sleep time
